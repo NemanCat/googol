@@ -1,11 +1,12 @@
-// Googol генератор статических html - страниц из шаблонов
-// модуль работы с блогом
+// Googol генератор статических html-страниц из шаблонов.
+// Модуль работы с блогом.
 
 package main
 
 import (
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -15,416 +16,318 @@ import (
 	"time"
 )
 
-//класс Рубрика блога
+// Tag описывает рубрику блога.
 type Tag struct {
 	XMLName  xml.Name `xml:"tag"`
 	Id       int      `xml:"id,attr"`
 	Name     string   `xml:"name,attr"`
 	Epigraph string   `xml:"epigraph"`
 	Posts    int
-	//Tagid    int
 }
 
-//структура Список рубрик блога
+// TagsList описывает список рубрик блога.
 type TagsList struct {
 	XMLName xml.Name `xml:"tags"`
 	Tags    []Tag    `xml:"tag"`
 }
 
-//структура поста блога
+// Post описывает пост блога.
 type Post struct {
-	//------------------------
-	//загружаемые из файла поля
-	//дата поста
-	Date string `xml:"date"`
-	//ФИО автора
-	Author string `xml:"author"`
-	//id рубрики
-	Tagid int `xml:"tagid"`
-	//заголовок поста
-	Title string `xml:"title"`
-	//список id сайтов
-	Sites string `xml:"sites"`
-	//аннотация поста
-	Annotation string `xml:"annotation"`
-	//краткая аннотация поста
+	// Загружаемые из файла поля.
+	Date             string `xml:"date"`
+	Author           string `xml:"author"`
+	Tagid            int    `xml:"tagid"`
+	Title            string `xml:"title"`
+	Sites            string `xml:"sites"`
+	Annotation       string `xml:"annotation"`
 	Short_annotation string `xml:"short_annotation"`
-	//контент поста
-	Content string `xml:"content"`
-	//-----------------------------
-	//вычисляемые поля
-	//уникальный строковый идентификатор поста
+	Content          string `xml:"content"`
+
+	// Вычисляемые поля.
 	Fuseaction string
-	//название рубрики поста
-	Tag string
-	//дата для сортировки списка
-	SortDate  time.Time
-	Day, Year int
-	Month     string
+	Tag        string
+	SortDate   time.Time
+	Day        int
+	Year       int
+	Month      string
 }
 
-//сортировка списка постов по дате
+// SortedBlogPostList используется для сортировки списка постов по дате.
 type SortedBlogPostList []Post
 
-func (p SortedBlogPostList) Len() int {
-	return len(p)
+func (p SortedBlogPostList) Len() int           { return len(p) }
+func (p SortedBlogPostList) Less(i, j int) bool { return p[i].SortDate.Before(p[j].SortDate) }
+func (p SortedBlogPostList) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
+
+// blogPageData описывает данные для шаблона страницы ленты блога.
+type blogPageData struct {
+	Fuseaction     string
+	Tags           []Tag
+	Blog           SortedBlogPostList
+	Pagenum        int
+	Next_page      int
+	Total          int
+	Tagid          int
+	Posts_per_page int
 }
 
-func (p SortedBlogPostList) Less(i, j int) bool {
-	return p[i].SortDate.Before(p[j].SortDate)
-}
+// loadTags загружает список рубрик блога.
+// settingsDir — директория файлов настроек сайта.
+func loadTags(settingsDir string) (*TagsList, error) {
+	var tags TagsList
 
-func (p SortedBlogPostList) Swap(i, j int) {
-	p[i], p[j] = p[j], p[i]
-}
-
-//-------------------------------------------------------------
-//функция загрузки списка рубрик блога
-//settings_dir - директория файлов настроек сайта
-func loadTags(settings_dir string) (*TagsList, error) {
-	var Tags TagsList
-	//проверяем существует ли в директории настроек файл со списком рубрик блога tags.xml
-	tags_list_file := filepath.Join(settings_dir, "tags.xml")
-	if _, err := os.Stat(tags_list_file); os.IsNotExist(err) {
+	// Проверяем, существует ли в директории настроек файл со списком рубрик блога tags.xml.
+	tagsListFile := filepath.Join(settingsDir, "tags.xml")
+	if _, err := os.Stat(tagsListFile); os.IsNotExist(err) {
 		return nil, errors.New("Не найден файл списка рубрик блога")
 	}
-	//загружаем список рубрик блога
-	raw, err := ioutil.ReadFile(tags_list_file)
+
+	// Загружаем список рубрик блога.
+	raw, err := ioutil.ReadFile(tagsListFile)
 	if err != nil {
 		return nil, err
 	}
-	err = xml.Unmarshal(raw, &Tags)
-	if err != nil {
+	if err = xml.Unmarshal(raw, &tags); err != nil {
 		return nil, err
 	}
-	for _, tag := range Tags.Tags {
-		tag.Posts = 0
+
+	for i := range tags.Tags {
+		tags.Tags[i].Posts = 0
 	}
-	return &Tags, nil
+
+	return &tags, nil
 }
 
-//----------------------------------------------------------
-//обход поддиректорий и обработка xml-файлов постов блога
-func handleBlogFiles(posts *SortedBlogPostList, tags *TagsList, total_posts *int) filepath.WalkFunc {
-	return func(current_path string, info os.FileInfo, err error) error {
+// findTagByID ищет рубрику по id и возвращает указатель на неё.
+func findTagByID(tags *TagsList, id int) *Tag {
+	if tags == nil {
+		return nil
+	}
+
+	for i := range tags.Tags {
+		if tags.Tags[i].Id == id {
+			return &tags.Tags[i]
+		}
+	}
+
+	return nil
+}
+
+// handleBlogFiles обходит поддиректории и обрабатывает xml-файлы постов блога.
+func handleBlogFiles(posts *SortedBlogPostList, tags *TagsList, totalPosts *int) filepath.WalkFunc {
+	return func(currentPath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		if src, _ := os.Stat(current_path); !src.IsDir() {
-			//обработка файла
-			_, filename := filepath.Split(current_path)
-			ext := filepath.Ext(filename)
-			if ext == ".xml" {
-				raw, err := ioutil.ReadFile(current_path)
-				if err != nil {
-					return err
-				}
-				var post Post
-				err = xml.Unmarshal(raw, &post)
-				if err != nil {
-					return err
-				}
-
-				*total_posts++
-				//увеличиваем счётчик постов в рубрике
-				tags.Tags[post.Tagid-1].Posts++
-				//уникальный строковый идентификатор поста
-				post.Fuseaction = strings.TrimSuffix(filename, filepath.Ext(filename))
-				//название рубрики поста
-				post.Tag = tags.Tags[post.Tagid-1].Name
-				//поле сортировки
-				post.SortDate, _ = time.Parse("02.01.2006", post.Date)
-				post.Day = post.SortDate.Day()
-				post.Month = RussianMonth[post.SortDate.Month()]
-				post.Year = post.SortDate.Year()
-				//добавляем в список постов блога
-				*posts = append(*posts, post)
-			}
-
+		if info == nil || info.IsDir() {
+			return nil
 		}
+
+		_, filename := filepath.Split(currentPath)
+		if filepath.Ext(filename) != ".xml" {
+			return nil
+		}
+
+		raw, err := ioutil.ReadFile(currentPath)
+		if err != nil {
+			return err
+		}
+
+		var post Post
+		if err = xml.Unmarshal(raw, &post); err != nil {
+			return err
+		}
+
+		tag := findTagByID(tags, post.Tagid)
+		if tag == nil {
+			return fmt.Errorf("пост %s содержит неизвестный tagid=%d", currentPath, post.Tagid)
+		}
+
+		post.SortDate, err = time.Parse("02.01.2006", post.Date)
+		if err != nil {
+			return fmt.Errorf("пост %s содержит некорректную дату %q: %w", currentPath, post.Date, err)
+		}
+
+		*totalPosts++
+		tag.Posts++
+
+		// Уникальный строковый идентификатор поста.
+		post.Fuseaction = strings.TrimSuffix(filename, filepath.Ext(filename))
+		// Название рубрики поста.
+		post.Tag = tag.Name
+		// Поля даты для шаблонов.
+		post.Day = post.SortDate.Day()
+		post.Month = RussianMonth[post.SortDate.Month()]
+		post.Year = post.SortDate.Year()
+
+		// Добавляем пост в список постов блога.
+		*posts = append(*posts, post)
+
 		return nil
 	}
 }
 
-//функция загрузки списка постов блога
-//posts_source_dir - исходная директория постов блога
-//tags - список рубрик блога
-//sitename - имя сайта
-//limit - количество выбираемых постов, 0 если не ограничено
-func loadBlog(posts_source_dir string, tags *TagsList) (*SortedBlogPostList, int, error) {
+// loadBlog загружает список постов блога.
+// postsSourceDir — исходная директория постов блога.
+// tags — список рубрик блога.
+func loadBlog(postsSourceDir string, tags *TagsList) (*SortedBlogPostList, int, error) {
 	var posts SortedBlogPostList
-	total_posts := 0
-	if _, err := os.Stat(posts_source_dir); err == nil {
-		//обрабатываем все файлы с расширением xml из директории блога и её поддиректорий
-		err = filepath.Walk(posts_source_dir, handleBlogFiles(&posts, tags, &total_posts))
+	totalPosts := 0
+
+	if _, err := os.Stat(postsSourceDir); err == nil {
+		// Обрабатываем все файлы с расширением xml из директории блога и её поддиректорий.
+		err = filepath.Walk(postsSourceDir, handleBlogFiles(&posts, tags, &totalPosts))
 		if err != nil {
 			return nil, 0, err
 		}
+	} else if !os.IsNotExist(err) {
+		return nil, 0, err
 	}
-	//сортируем список постов блога
+
+	// Сортируем список постов блога.
 	sort.Sort(sort.Reverse(posts))
-	return &posts, total_posts, nil
+
+	return &posts, totalPosts, nil
 }
 
-//------------------------------------------------------------
-//формирование файлов блога
-//settings_dir - директория файлов настроек сайта
-//destination_blogdir - целевая директория файлов публикаций
-//posts_sourcedir - исходная директория постов блога
-//templates_dir - директория шаблонов сайта
-//domain - домен сайта
-//sitemap - содержимое файла sitemap
-func CreateBlog(settings_dir string, destination_blogdir string, posts_sourcedir string, templates_dir string, domain string, sitemap *string) error {
-	//--------------------------------------------
-	//количество постов блога на страницу
-	posts_per_page := 10
-	//--------------------------------------------
-	//загружаем список рубрик блога
-	tags, err := loadTags(settings_dir)
-	if err != nil {
-		return err
-	}
-	//если в целевой директории отсутствует папка блога blog - создаём её
-	if _, err := os.Stat(destination_blogdir); os.IsNotExist(err) {
-		//создаём директорию
-		err = os.Mkdir(destination_blogdir, 0755)
-		if err != nil {
-			return err
-		}
-	}
-	//если в целевой папке блога отсутствует папка постов posts - создаём её
-	posts_dir := filepath.Join(destination_blogdir, "posts")
-	if _, err := os.Stat(posts_dir); os.IsNotExist(err) {
-		//создаём директорию
-		err = os.Mkdir(posts_dir, 0755)
-		if err != nil {
-			return err
-		}
-	}
-	//загружаем список постов блога
-	posts, total_posts, err := loadBlog(posts_sourcedir, tags)
-	if err != nil {
-		return err
-	}
-	//формируем список рубрик блога, в которых есть посты
-	active_tags := []Tag{}
-	for _, value := range tags.Tags {
-		//fmt.Println(value.Id)
-		if value.Posts > 0 {
-			active_tags = append(active_tags, value)
-		}
-	}
-	//--------------------------------------------
-	//формируем ленту блога без фильтрации
-	//проверяем наличие в директории настроек сайта шаблона ленты блога blog.html
-	blog_template_path := filepath.Join(settings_dir, "blog.html")
-	if _, err := os.Stat(blog_template_path); os.IsNotExist(err) {
-		return errors.New("Не найден файл шаблона ленты блога")
-	}
-	//разбиваем ленту блога на страницы
-	current_blog_page := []Post{}
-	current_posts_count := 1
-	current_page := 1
-
-	for _, value := range *posts {
-		if current_posts_count < posts_per_page {
-			//добавляем пост в список постов для текущей страницы
-			current_blog_page = append(current_blog_page, value)
-			current_posts_count++
-		} else {
-			//сохраняем очередную страницу
-			//данные для передачи шаблону
-			data := struct {
-				Fuseaction     string
-				Tags           []Tag
-				Blog           SortedBlogPostList
-				Pagenum        int
-				Next_page      int
-				Total          int
-				Tagid          int
-				Posts_per_page int
-			}{
-				"blog.html",
-				active_tags,
-				current_blog_page,
-				current_page,
-				1,
-				total_posts,
-				0,
-				posts_per_page,
-			}
-			//формируем страницу
-			content, err := ParseFileView(blog_template_path, templates_dir, data, "blog.html")
-			if err != nil {
-				return errors.New(ErrorMessages["parse_template_error"] + err.Error())
-			}
-			//сохраняем в целевую директорию
-			if current_page == 1 {
-				err = ioutil.WriteFile(filepath.Join(destination_blogdir, "index.html"), []byte(content), 0755)
-			} else {
-				err = ioutil.WriteFile(filepath.Join(destination_blogdir, strconv.Itoa(current_page)+".html"), []byte(content), 0755)
-			}
-			if err != nil {
-				return errors.New(ErrorMessages["error_creating_file"] + err.Error())
-			}
-			//переустанавливаем счётчики
-			current_page++
-			current_posts_count = 1
-			current_blog_page = current_blog_page[:0]
-		}
+// writeBlogFeedPages формирует страницы ленты блога.
+func writeBlogFeedPages(blogTemplatePath string, templatesDir string, targetDir string, activeTags []Tag, posts []Post, totalPosts int, tagID int, postsPerPage int) error {
+	if postsPerPage <= 0 {
+		return errors.New("количество постов на страницу должно быть больше нуля")
 	}
 
-	//данные для передачи шаблону
-	data := struct {
-		Fuseaction     string
-		Tags           []Tag
-		Blog           SortedBlogPostList
-		Pagenum        int
-		Next_page      int
-		Total          int
-		Tagid          int
-		Posts_per_page int
-	}{
-		"blog.html",
-		active_tags,
-		current_blog_page,
-		current_page,
-		0,
-		total_posts,
-		0,
-		posts_per_page,
-	}
-	//формируем страницу
-	content, err := ParseFileView(blog_template_path, templates_dir, data, "blog.html")
-	if err != nil {
-		return errors.New(ErrorMessages["parse_template_error"] + err.Error())
-	}
-	//сохраняем в целевую директорию
-	if current_page == 1 {
-		err = ioutil.WriteFile(filepath.Join(destination_blogdir, "index.html"), []byte(content), 0755)
-	} else {
-		err = ioutil.WriteFile(filepath.Join(destination_blogdir, strconv.Itoa(current_page)+".html"), []byte(content), 0755)
-	}
-	if err != nil {
-		return errors.New(ErrorMessages["error_creating_file"] + err.Error())
-	}
-
-	//для всех активных рубрик блога формируем собственный файл ленты
-	tag_posts := make(map[string][]Post)
-	for _, value := range active_tags {
-		tag_posts[value.Name] = []Post{}
-	}
-
-	for _, value := range *posts {
-		tag_posts[value.Tag] = append(tag_posts[value.Tag], value)
-	}
-
-	for _, value := range active_tags {
-		target_dir := filepath.Join(destination_blogdir, strconv.Itoa(value.Id))
-		if _, err := os.Stat(target_dir); os.IsNotExist(err) {
-			//создаём директорию
-			err = os.Mkdir(target_dir, 0755)
-			if err != nil {
-				return err
-			}
+	currentPage := 1
+	for start := 0; start < len(posts) || start == 0; start += postsPerPage {
+		end := start + postsPerPage
+		if end > len(posts) {
+			end = len(posts)
 		}
-		//разбиваем ленту блога на страницы
-		current_blog_page := []Post{}
-		current_posts_count := 1
-		current_page := 1
 
-		for _, post := range tag_posts[value.Name] {
-			if current_posts_count < posts_per_page {
-				//добавляем пост в список постов для текущей страницы
-				current_blog_page = append(current_blog_page, post)
-				current_posts_count++
-			} else {
-				//сохраняем очередную страницу
-				//данные для передачи шаблону
-				data := struct {
-					Fuseaction     string
-					Tags           []Tag
-					Blog           SortedBlogPostList
-					Pagenum        int
-					Next_page      int
-					Total          int
-					Tagid          int
-					Posts_per_page int
-				}{
-					"blog.html",
-					active_tags,
-					current_blog_page,
-					current_page,
-					1,
-					total_posts,
-					value.Id,
-					posts_per_page,
-				}
-				//формируем страницу
-				content, err := ParseFileView(blog_template_path, templates_dir, data, "blog.html")
-				if err != nil {
-					return errors.New(ErrorMessages["parse_template_error"] + err.Error())
-				}
-				//сохраняем в целевую директорию
-				if current_page == 1 {
-					err = ioutil.WriteFile(filepath.Join(target_dir, "index.html"), []byte(content), 0755)
-				} else {
-					err = ioutil.WriteFile(filepath.Join(target_dir, strconv.Itoa(current_page)+".html"), []byte(content), 0755)
-				}
-				if err != nil {
-					return errors.New(ErrorMessages["error_creating_file"] + err.Error())
-				}
-				//переустанавливаем счётчики
-				current_page++
-				current_posts_count = 1
-				current_blog_page = current_blog_page[:0]
-			}
+		nextPage := 0
+		if end < len(posts) {
+			nextPage = 1
 		}
-		//данные для передачи шаблону
-		data := struct {
-			Fuseaction     string
-			Tags           []Tag
-			Blog           SortedBlogPostList
-			Pagenum        int
-			Next_page      int
-			Total          int
-			Tagid          int
-			Posts_per_page int
-		}{
-			"blog.html",
-			active_tags,
-			current_blog_page,
-			current_page,
-			0,
-			total_posts,
-			value.Id,
-			posts_per_page,
+
+		data := blogPageData{
+			Fuseaction:     "blog.html",
+			Tags:           activeTags,
+			Blog:           SortedBlogPostList(posts[start:end]),
+			Pagenum:        currentPage,
+			Next_page:      nextPage,
+			Total:          totalPosts,
+			Tagid:          tagID,
+			Posts_per_page: postsPerPage,
 		}
-		//формируем страницу
-		content, err := ParseFileView(blog_template_path, templates_dir, data, "blog.html")
+
+		content, err := ParseFileView(blogTemplatePath, templatesDir, data, "blog.html")
 		if err != nil {
 			return errors.New(ErrorMessages["parse_template_error"] + err.Error())
 		}
-		//сохраняем в целевую директорию
-		if current_page == 1 {
-			err = ioutil.WriteFile(filepath.Join(target_dir, "index.html"), []byte(content), 0755)
-		} else {
-			err = ioutil.WriteFile(filepath.Join(target_dir, strconv.Itoa(current_page)+".html"), []byte(content), 0755)
+
+		filename := "index.html"
+		if currentPage > 1 {
+			filename = strconv.Itoa(currentPage) + ".html"
 		}
-		if err != nil {
+
+		if err = ioutil.WriteFile(filepath.Join(targetDir, filename), []byte(content), 0755); err != nil {
 			return errors.New(ErrorMessages["error_creating_file"] + err.Error())
 		}
 
+		currentPage++
+		if end == len(posts) {
+			break
+		}
 	}
-	//--------------------------------------------------------
-	//формируем страницы постов блога
-	//проверяем наличие в директории настроек сайта шаблона поста блога post.html
-	post_template_path := filepath.Join(settings_dir, "post.html")
-	if _, err := os.Stat(post_template_path); os.IsNotExist(err) {
-		return errors.New("Не найден файл шаблона поста блога")
+
+	return nil
+}
+
+// CreateBlog формирует файлы блога.
+// settingsDir — директория файлов настроек сайта.
+// destinationBlogDir — целевая директория файлов публикаций.
+// postsSourceDir — исходная директория постов блога.
+// templatesDir — директория шаблонов сайта.
+// domain — домен сайта.
+// sitemap — содержимое файла sitemap.
+func CreateBlog(settingsDir string, destinationBlogDir string, postsSourceDir string, templatesDir string, domain string, sitemap *string) error {
+	// Количество постов блога на страницу.
+	postsPerPage := 10
+
+	// Загружаем список рубрик блога.
+	tags, err := loadTags(settingsDir)
+	if err != nil {
+		return err
+	}
+
+	// Если в целевой директории отсутствует папка блога blog, создаём её.
+	if _, err := os.Stat(destinationBlogDir); os.IsNotExist(err) {
+		if err = os.Mkdir(destinationBlogDir, 0755); err != nil {
+			return err
+		}
+	}
+
+	// Если в целевой папке блога отсутствует папка постов posts, создаём её.
+	postsDir := filepath.Join(destinationBlogDir, "posts")
+	if _, err := os.Stat(postsDir); os.IsNotExist(err) {
+		if err = os.Mkdir(postsDir, 0755); err != nil {
+			return err
+		}
+	}
+
+	// Загружаем список постов блога.
+	posts, totalPosts, err := loadBlog(postsSourceDir, tags)
+	if err != nil {
+		return err
+	}
+
+	// Формируем список рубрик блога, в которых есть посты.
+	activeTags := []Tag{}
+	for _, value := range tags.Tags {
+		if value.Posts > 0 {
+			activeTags = append(activeTags, value)
+		}
+	}
+
+	// Проверяем наличие в директории настроек сайта шаблона ленты блога blog.html.
+	blogTemplatePath := filepath.Join(settingsDir, "blog.html")
+	if _, err := os.Stat(blogTemplatePath); os.IsNotExist(err) {
+		return errors.New("Не найден файл шаблона ленты блога")
+	}
+
+	// Формируем ленту блога без фильтрации.
+	if err = writeBlogFeedPages(blogTemplatePath, templatesDir, destinationBlogDir, activeTags, []Post(*posts), totalPosts, 0, postsPerPage); err != nil {
+		return err
+	}
+
+	// Для всех активных рубрик блога формируем собственный файл ленты.
+	tagPosts := make(map[string][]Post)
+	for _, value := range activeTags {
+		tagPosts[value.Name] = []Post{}
 	}
 	for _, value := range *posts {
-		//данные для передачи шаблону
+		tagPosts[value.Tag] = append(tagPosts[value.Tag], value)
+	}
+
+	for _, value := range activeTags {
+		targetDir := filepath.Join(destinationBlogDir, strconv.Itoa(value.Id))
+		if _, err := os.Stat(targetDir); os.IsNotExist(err) {
+			if err = os.Mkdir(targetDir, 0755); err != nil {
+				return err
+			}
+		}
+
+		if err = writeBlogFeedPages(blogTemplatePath, templatesDir, targetDir, activeTags, tagPosts[value.Name], len(tagPosts[value.Name]), value.Id, postsPerPage); err != nil {
+			return err
+		}
+	}
+
+	// Формируем страницы постов блога.
+	postTemplatePath := filepath.Join(settingsDir, "post.html")
+	if _, err := os.Stat(postTemplatePath); os.IsNotExist(err) {
+		return errors.New("Не найден файл шаблона поста блога")
+	}
+
+	for _, value := range *posts {
 		data := struct {
 			Fuseaction string
 			Tags       []Tag
@@ -432,23 +335,23 @@ func CreateBlog(settings_dir string, destination_blogdir string, posts_sourcedir
 			Total      int
 		}{
 			"post.html",
-			active_tags,
+			activeTags,
 			value,
-			total_posts,
+			totalPosts,
 		}
-		//формируем страницу
-		content, err := ParseFileView(post_template_path, templates_dir, data, "post.html")
+
+		content, err := ParseFileView(postTemplatePath, templatesDir, data, "post.html")
 		if err != nil {
 			return errors.New(ErrorMessages["parse_template_error"] + err.Error())
 		}
-		//сохраняем в целевую директорию
-		err = ioutil.WriteFile(filepath.Join(posts_dir, value.Fuseaction+".html"), []byte(content), 0755)
-		if err != nil {
+
+		if err = ioutil.WriteFile(filepath.Join(postsDir, value.Fuseaction+".html"), []byte(content), 0755); err != nil {
 			return errors.New(ErrorMessages["error_creating_file"] + err.Error())
 		}
-		//url страницы поста блога на целевом сервере
+
+		// URL страницы поста блога на целевом сервере.
 		url := domain + "/blog/posts/" + value.Fuseaction + ".html"
-		//добавляем страницу в sitemap.xml
+		// Добавляем страницу в sitemap.xml.
 		*sitemap += "<url><loc>" + url + "</loc></url>"
 	}
 

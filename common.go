@@ -1,11 +1,10 @@
-// Googol генератор статических html - страниц из шаблонов
-// общие данные и функции приложения
+// Googol генератор статических html-страниц из шаблонов.
+// Общие данные и функции приложения.
 
 package main
 
 import (
 	"bytes"
-	//"fmt"
 	"hash/crc32"
 	"io"
 	"io/ioutil"
@@ -16,10 +15,10 @@ import (
 	"time"
 )
 
-//подсказка
+// Подсказка по запуску приложения.
 var HelpMessage = "Пример использования: googol -source=путь_к_исходной_директории -destination=путь_к_целевой_директории -domain=имя_домена_сайта"
 
-//сообщения об ошибках
+// Сообщения об ошибках.
 var ErrorMessages = map[string]string{
 	"required_parameter":       "Не указано значение обязательного параметра: ",
 	"directory_not_exists":     "Указанная директория не существует: ",
@@ -33,7 +32,7 @@ var ErrorMessages = map[string]string{
 
 const IEEE = 0xedb88320
 
-//русские названия месяцев
+// Русские названия месяцев.
 var RussianMonth = map[time.Month]string{
 	time.January:   "Января",
 	time.February:  "Февраля",
@@ -49,92 +48,124 @@ var RussianMonth = map[time.Month]string{
 	time.December:  "Декабря",
 }
 
-//--------------------------------------------------------------
-//копирование файла
-func CopyFile(source string, dest string) (err error) {
+// CopyFile копирует файл source в файл dest и сохраняет права исходного файла.
+func CopyFile(source string, dest string) error {
 	sourcefile, err := os.Open(source)
 	if err != nil {
 		return err
 	}
 	defer sourcefile.Close()
+
 	destfile, err := os.Create(dest)
 	if err != nil {
 		return err
 	}
 	defer destfile.Close()
-	_, err = io.Copy(destfile, sourcefile)
-	if err == nil {
-		sourceinfo, err := os.Stat(source)
-		if err != nil {
-			err = os.Chmod(dest, sourceinfo.Mode())
-		}
+
+	if _, err = io.Copy(destfile, sourcefile); err != nil {
+		return err
 	}
-	return
+
+	sourceinfo, err := os.Stat(source)
+	if err != nil {
+		return err
+	}
+
+	return os.Chmod(dest, sourceinfo.Mode())
 }
 
-//вычисление crc32 - хэша строки
+// HashStringCrc32 вычисляет crc32-хэш строки.
 func HashStringCrc32(source string) string {
 	table := crc32.MakeTable(IEEE)
 	return strconv.FormatUint(uint64(crc32.Checksum([]byte(source), table)), 10)
 }
 
-//вычисление crc32 - хэша файла
-func HashFileCrc32(filepath string) string {
-	content, _ := ioutil.ReadFile(filepath)
-	return HashStringCrc32(string(content))
+// HashFileCrc32WithError вычисляет crc32-хэш файла и возвращает ошибку чтения файла.
+func HashFileCrc32WithError(filepath string) (string, error) {
+	content, err := ioutil.ReadFile(filepath)
+	if err != nil {
+		return "", err
+	}
+
+	return HashStringCrc32(string(content)), nil
 }
 
-//поиск строки в массиве строк
+// HashFileCrc32 вычисляет crc32-хэш файла.
+// Функция сохранена для обратной совместимости со старым кодом.
+// Новый код лучше писать через HashFileCrc32WithError, чтобы не терять ошибку чтения файла.
+func HashFileCrc32(filepath string) string {
+	hash, err := HashFileCrc32WithError(filepath)
+	if err != nil {
+		return ""
+	}
+
+	return hash
+}
+
+// IsStringInList проверяет наличие строки в массиве строк.
 func IsStringInList(value string, list []string) bool {
 	for _, v := range list {
 		if v == value {
 			return true
 		}
 	}
+
 	return false
 }
 
-//-------------------------------------------------------------------------------------
-//парсинг файла
-//pagepath - полный путь к файлу
-//templates_dir - директория  шаблонов с расширением *.tmpl (может быть пустая строка)
-//data - данные, передаваемые шаблону
-func ParseFileView(pagepath string, templates_dir string, data interface{}, fuseaction string) (string, error) {
+// ParseFileView парсит файл шаблона.
+// pagepath — полный путь к файлу.
+// templatesDir — директория шаблонов с расширением *.tmpl, может быть пустой строкой.
+// data — данные, передаваемые шаблону.
+// fuseaction — имя корневого шаблона.
+func ParseFileView(pagepath string, templatesDir string, data interface{}, fuseaction string) (string, error) {
 	var doc bytes.Buffer
-	//функции для шаблонов
+
+	// Функции для шаблонов.
 	funcMap := template.FuncMap{
-		//прибавление единицы
+		// Прибавление единицы.
 		"Inc": func(i int) int {
 			return i + 1
 		},
-		//вычитание единицы
+		// Вычитание единицы.
 		"Dec": func(i int) int {
 			return i - 1
 		},
-		//первая буква в строке
+		// Первая буква в строке.
 		"First": func(s string) string {
-			return string([]rune(s)[0])
+			runes := []rune(s)
+			if len(runes) == 0 {
+				return ""
+			}
+
+			return string(runes[0])
 		},
 	}
 
-	//создаём шаблон
+	// Создаём шаблон.
 	t := template.New(fuseaction).Funcs(funcMap)
-	//загружаем дополнительные шаблоны если есть
-	if len(templates_dir) > 0 {
-		_, err := t.ParseGlob(filepath.Join(templates_dir, "*.tmpl"))
+
+	// Загружаем дополнительные шаблоны, если они есть.
+	if len(templatesDir) > 0 {
+		_, err := t.ParseGlob(filepath.Join(templatesDir, "*.tmpl"))
 		if err != nil {
 			return "", err
 		}
 	}
-	//загружаем файл для парсинга
-	tmpl, _ := ioutil.ReadFile(pagepath)
-	t, err := t.Parse(string(tmpl))
+
+	// Загружаем файл для парсинга.
+	tmpl, err := ioutil.ReadFile(pagepath)
 	if err != nil {
 		return "", err
 	}
-	//парсим файл шаблона
-	err = t.Execute(&doc, data)
+
+	t, err = t.Parse(string(tmpl))
 	if err != nil {
+		return "", err
+	}
+
+	// Парсим файл шаблона.
+	if err = t.Execute(&doc, data); err != nil {
 		return "", err
 	}
 

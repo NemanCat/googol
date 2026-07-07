@@ -10,12 +10,12 @@ import (
 	"strings"
 )
 
-//запись контента в файл на целевом сервере и сохранение md5 - хэша контента на исходном сервере
-//destination_file - файл на целевом сервере
-//content - контент для записи в целевой файл
-//fuseaction - уникальный строковый идентификатор файла
-//file - исходный файл
-//source_root - корень исходной директории
+// запись контента в файл на целевом сервере и сохранение md5 - хэша контента на исходном сервере
+// destination_file - файл на целевом сервере
+// content - контент для записи в целевой файл
+// fuseaction - уникальный строковый идентификатор файла
+// file - исходный файл
+// source_root - корень исходной директории
 func writeContentToDest(destination_file string, content string, fuseaction string, file string, source_root string) error {
 	//определяем файловые реквизиты исходного файла
 	sourceinfo, err := os.Stat(file)
@@ -27,6 +27,12 @@ func writeContentToDest(destination_file string, content string, fuseaction stri
 	if err != nil {
 		return errors.New(ErrorMessages["error_creating_file"] + err.Error())
 	}
+
+	err = os.Chmod(destination_file, 0644)
+	if err != nil {
+		return errors.New(ErrorMessages["error_creating_file"] + err.Error())
+	}
+
 	//сохраняем md5-хэш контента
 	err = ioutil.WriteFile(filepath.Join(source_root, "__hash", fuseaction+".crc"), []byte(HashStringCrc32(content)), sourceinfo.Mode())
 	if err != nil {
@@ -35,15 +41,15 @@ func writeContentToDest(destination_file string, content string, fuseaction stri
 	return nil
 }
 
-//обработка файла html/php
-//file - полный путь к исходному файлу
-//destination_root - корень целевой директории
-//source_root - корень исходной директории
-//blog - список постов блога (nil если блога нет или он пустой)
-//tags - список рубрик блога
-//articles - список публикаций
-//sitemap - содержимое файла sitemap
-//domain - целевой домен
+// обработка файла html/php
+// file - полный путь к исходному файлу
+// destination_root - корень целевой директории
+// source_root - корень исходной директории
+// blog - список постов блога (nil если блога нет или он пустой)
+// tags - список рубрик блога
+// articles - список публикаций
+// sitemap - содержимое файла sitemap
+// domain - целевой домен
 func handleParseFile(file string, destination_root string, source_root string, sitemap *string, domain string) error {
 	//если на исходном сервере нет директории __hash, создаём её
 	if _, err := os.Stat(filepath.Join(source_root, "__hash")); os.IsNotExist(err) {
@@ -115,10 +121,10 @@ func handleParseFile(file string, destination_root string, source_root string, s
 	return nil
 }
 
-//обработка файла не html/php
-//file - полный путь к исходному файлу
-//destination_root - корень целевой директории
-//source_root - корень исходной директории
+// обработка файла не html/php
+// file - полный путь к исходному файлу
+// destination_root - корень целевой директории
+// source_root - корень исходной директории
 func handleCopyFile(file string, destination_root string, source_root string) error {
 	//существует ли файл с таким именем на целевом сервере
 	destination_file := strings.Replace(file, source_root, destination_root, -1)
@@ -143,11 +149,11 @@ func handleCopyFile(file string, destination_root string, source_root string) er
 	return nil
 }
 
-//обработка файлов в поддиректориях исходной директории
-//destination_root - корень целевой директории
-//source_root - корень исходной директории
-//sitemap - содержимое файла sitemap
-//domain - целевой домен
+// обработка файлов в поддиректориях исходной директории
+// destination_root - корень целевой директории
+// source_root - корень исходной директории
+// sitemap - содержимое файла sitemap
+// domain - целевой домен
 func handleSourceFile(destination_root string, source_root string, sitemap *string, domain string) filepath.WalkFunc {
 	return func(current_path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -182,11 +188,11 @@ func handleSourceFile(destination_root string, source_root string, sitemap *stri
 	}
 }
 
-//обход поддиректорий исходной директории
-//source - исходная директория
-//destination - целевая директория
-//sitemap - содержимое файла sitemap
-//domain - целевой домен
+// обход поддиректорий исходной директории
+// source - исходная директория
+// destination - целевая директория
+// sitemap - содержимое файла sitemap
+// domain - целевой домен
 func HandleSourceDir(source string, destination string, sitemap *string, domain string) error {
 	err := filepath.Walk(source, handleSourceFile(destination, source, sitemap, domain))
 	return err
